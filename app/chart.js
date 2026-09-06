@@ -11,23 +11,20 @@
 // The SVG is always rendered at a fixed pixel size that matches its own
 // viewBox exactly, so the browser never rescales it (a rescaled SVG whose
 // height doesn't match its rescaled width gets letterboxed, growing with row
-// count). The label column and value gutters shrink smoothly with the
-// container down to LABEL_MIN/GUTTER_MIN, so narrow phones fit without
-// needing to scroll; HARD_MIN is just a failsafe against a zero-width render.
+// count). The label column scales with the container between LABEL_MIN and
+// LABEL_MAX, so narrow phones fit and wide screens show longer labels;
+// HARD_MIN is just a failsafe against a zero-width render.
 
 const ROW_H = 26, BAR_H = 12, PAD = 8, R = 3, HARD_MIN = 240;
-const LABEL_FULL = 168, LABEL_MIN = 96, W_COMPACT = 300, W_FULL = 420;
-const GUTTER_FULL = 56, GUTTER_MIN = 44;
+const LABEL_MIN = 96, LABEL_MAX = 260, LABEL_FRAC = 0.34;
+const GUTTER = 48;
 const FEAT_FONT = "12px system-ui, -apple-system, sans-serif";
 
-// Linear interpolation between a compact and a full value, clamped, keyed off
-// the available width so layout degrades gracefully rather than at a cliff.
-function scaleDim(full, min, width) {
-  if (width >= W_FULL) return full;
-  if (width <= W_COMPACT) return min;
-  const t = (width - W_COMPACT) / (W_FULL - W_COMPACT);
-  return Math.round(min + t * (full - min));
-}
+// Label column as a fraction of container width, clamped. Grows continuously
+// with the container instead of freezing past a fixed breakpoint, so labels
+// get more room (and truncate less) on wider screens; GUTTER stays constant
+// since it only needs to fit a short signed number, not the container width.
+const clampScale = (width, frac, min, max) => Math.min(max, Math.max(min, width * frac));
 
 // rect-with-only-the-data-end rounded, as an SVG path
 function bar(x0, x1, y, h, r) {
@@ -64,17 +61,23 @@ export function renderBars(container, items) {
   // zero-width render before layout settles). No artificial floor beyond
   // that, so narrow phones aren't forced into horizontal scroll.
   const width = Math.max(container.clientWidth || 640, HARD_MIN);
-  const LABEL_W = scaleDim(LABEL_FULL, LABEL_MIN, width);
-  const GUTTER = scaleDim(GUTTER_FULL, GUTTER_MIN, width);
+  const LABEL_W = clampScale(width, LABEL_FRAC, LABEL_MIN, LABEL_MAX);
 
   // The bar area sits between the label column and a value-label gutter on
   // BOTH sides, so a long negative value's number has its own reserved space
   // and never reaches back into the labels.
   const plotL = LABEL_W + GUTTER, plotR = width - GUTTER;
   const plotW = plotR - plotL;
-  const zeroX = plotL + plotW / 2;
-  const maxAbs = Math.max(...items.map((d) => Math.abs(d.value))) || 1;
-  const scale = (v) => (v / maxAbs) * (plotW / 2 - PAD);
+  // Give each side of zero a width proportional to its own max magnitude,
+  // not a fixed 50/50 split. A fixed split wastes space on whichever side
+  // has the smaller max (e.g. neg maxes out at 4.14 while pos reaches 5.69:
+  // the neg half would only ever fill ~73% of its space). This way the
+  // longest bar on either side always reaches its own edge.
+  const maxPos = Math.max(0, ...items.map((d) => d.value)) || 1e-9;
+  const maxNeg = Math.max(0, ...items.map((d) => -d.value)) || 1e-9;
+  const negW = (plotW * maxNeg) / (maxNeg + maxPos);
+  const zeroX = plotL + negW;
+  const scale = (v) => (v >= 0 ? (v / maxPos) * (plotW - negW - PAD) : (v / maxNeg) * (negW - PAD));
   const height = items.length * ROW_H + 8;
   const labelMaxW = LABEL_W - 16;
 
